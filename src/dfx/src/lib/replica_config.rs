@@ -31,6 +31,7 @@ pub struct CanisterHttpAdapterConfig {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ArtifactPoolConfig {
     pub consensus_pool_path: PathBuf,
+    pub ingress_pool_max_count: usize,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -59,7 +60,7 @@ impl ReplicaConfig {
     pub fn new(
         state_root: &Path,
         subnet_type: ReplicaSubnetType,
-        log_level: ReplicaLogLevel,
+        _log_level: ReplicaLogLevel,
     ) -> Self {
         ReplicaConfig {
             http_handler: HttpHandlerConfig {
@@ -74,6 +75,7 @@ impl ReplicaConfig {
             },
             artifact_pool: ArtifactPoolConfig {
                 consensus_pool_path: state_root.join("consensus_pool"),
+                ingress_pool_max_count: 1024,
             },
             subnet_type,
             btc_adapter: BtcAdapterConfig {
@@ -84,7 +86,7 @@ impl ReplicaConfig {
                 enabled: false,
                 socket_path: None,
             },
-            log_level,
+            log_level: ReplicaLogLevel::Info,
         }
     }
 
