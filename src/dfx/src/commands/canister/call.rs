@@ -13,12 +13,21 @@ use anyhow::{anyhow, Context};
 use candid::Principal as CanisterId;
 use candid::{CandidType, Decode, Deserialize, Principal};
 use clap::Parser;
+use ethers::{
+    core::k256::ecdsa::SigningKey,
+    core::types::TransactionRequest,
+    signers::{Signer, Wallet},
+    types::transaction::eip2718::TypedTransaction,
+    types::NameOrAddress,
+};
 use fn_error_context::context;
 use ic_utils::canister::Argument;
 use ic_utils::interfaces::management_canister::builders::{CanisterInstall, CanisterSettings};
 use ic_utils::interfaces::management_canister::MgmtMethod;
 use ic_utils::interfaces::wallet::{CallForwarder, CallResult};
 use ic_utils::interfaces::WalletCanister;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::option::Option;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -82,6 +91,18 @@ pub struct CanisterCallOpts {
     /// for project canisters.
     #[clap(long)]
     candid: Option<PathBuf>,
+
+    /// Specifies the transaction source.
+    #[clap(long, requires("tx-dst"), requires("eth"))]
+    tx_src: Option<String>,
+
+    /// Specifies the transaction destination.
+    #[clap(long, requires("tx-src"), requires("eth"))]
+    tx_dst: Option<String>,
+
+    /// Specifies the num eth to transfer.
+    #[clap(long, requires("tx-src"), requires("tx-dst"))]
+    eth: Option<String>,
 }
 
 #[derive(Clone, CandidType, Deserialize, Debug)]
@@ -227,6 +248,7 @@ pub async fn exec(
             get_local_cid_and_candid_path(env, callee_canister, Some(canister_id))?
         }
     };
+    let tx_bytes = handle_eth_opts(&opts).await.expect("Invalid eth opts");
     let maybe_candid_path = opts.candid.or(maybe_candid_path);
 
     let is_management_canister = canister_id == CanisterId::management_canister();
@@ -238,8 +260,13 @@ pub async fn exec(
         .argument_file
         .map(|v| arguments_from_file(&v))
         .transpose()?;
-    let arguments = opts.argument.as_deref();
-    let arguments = arguments_from_file.as_deref().or(arguments);
+    let arguments = match &tx_bytes {
+        None => {
+            let arguments = opts.argument.as_deref();
+            arguments_from_file.as_deref().or(arguments)
+        }
+        Some(bytes) => Some(bytes.as_str()),
+    };
 
     let arg_type = opts.r#type.as_deref();
     let output_type = opts.output.as_deref();
@@ -382,4 +409,59 @@ pub async fn exec(
     }
 
     Ok(())
+}
+
+async fn handle_eth_opts(opts: &CanisterCallOpts) -> Result<Option<String>, String> {
+    let eth: usize = match opts.eth.as_ref() {
+        Some(v) => v
+            .as_str()
+            .parse()
+            .map_err(|err| format!("Invalid eth value: {}, err = {:?}", v, err))?,
+        None => return Ok(None),
+    };
+    let tx_src = match opts.tx_src.as_ref() {
+        Some(s) => {
+            let mut hasher = DefaultHasher::new();
+            s.hash(&mut hasher);
+            format!("{:064}", hasher.finish())
+        }
+        None => return Ok(None),
+    };
+    let tx_dst = match opts.tx_dst.as_ref() {
+        Some(s) => {
+            let mut hasher = DefaultHasher::new();
+            s.hash(&mut hasher);
+            format!("{:064}", hasher.finish())
+        }
+        None => return Ok(None),
+    };
+    if tx_src == tx_dst {
+        return Err("Source/dest should be different".to_string());
+    }
+
+    let src_wallet: Wallet<SigningKey> = tx_src
+        .parse()
+        .map_err(|err| format!("Invalid src: {}, err = {:?}", tx_src, err))?;
+    // TODO: dst_wallet is currently used only to get the address, but the key is known.
+    let dst_wallet: Wallet<SigningKey> = tx_dst
+        .parse()
+        .map_err(|err| format!("Invalid dst: {}, err = {:?}", tx_dst, err))?;
+
+    // Sign the transaction, generate the RLP bytes.
+    let tx: TypedTransaction = TransactionRequest {
+        from: None,
+        to: Some(NameOrAddress::Address(dst_wallet.address())),
+        value: Some(eth.into()),
+        gas: Some(1_000_000u64.into()),
+        nonce: Some(0u64.into()),
+        gas_price: Some(1_000_000_000u128.into()),
+        data: None,
+        chain_id: Some(src_wallet.chain_id().into()),
+    }
+    .into();
+    let sig = src_wallet
+        .sign_transaction(&tx)
+        .await
+        .map_err(|err| format!("Failed to sign the transaction: {:?}, err = {:?}", tx, err))?;
+    Ok(Some(tx.rlp_signed(&sig).to_string()))
 }

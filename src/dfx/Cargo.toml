@@ -39,6 +39,7 @@ ctrlc = { version = "3.2.1", features = [ "termination" ] }
 dfx-core = { path = "../dfx-core" }
 dialoguer = "0.10.0"
 directories-next = "2.0.0"
+ethers = "1.0.2"
 flate2 = { version = "1.0.11", default-features = false, features = ["zlib-ng"] }
 fn-error-context = "0.2.0"
 futures = "0.3.21"
